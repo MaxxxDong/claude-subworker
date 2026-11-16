@@ -1,0 +1,36 @@
+#!/bin/zsh
+# Claude Code 宿主下的 subworker 入口：复用 Codex 版实现，只做宿主适配。
+# 1. dispatch/continue/steer 前清掉宿主会话注入的 CLAUDE* 变量，
+#    让 Claude 后端成为独立进程，而不是挂到当前桌面会话下的子会话。
+# 2. wait 未指定 --consumer 时，用当前 Claude 会话 ID 作为告警回执身份。
+# 3. 宿主是 dwj（CLAUDE_CONFIG_DIR=~/.claude-dwj）时，Claude 后端改由 dwj 启动。
+set -euo pipefail
+
+real="${SUBWORKER_REAL_BIN:-$HOME/.codex/skills/subworker/bin/subworker}"
+if [[ ! -x "$real" ]]; then
+  print -u2 "claude-subworker: 找不到底层实现 $real（可用 SUBWORKER_REAL_BIN 覆盖）"
+  exit 127
+fi
+
+cmd="${1:-}"
+case "$cmd" in
+  dispatch|continue|steer)
+    host_config="${CLAUDE_CONFIG_DIR:-}"
+    host_vars=(${(k)parameters[(I)CLAUDE*]})
+    (( ${#host_vars} )) && unset $host_vars
+    # 3. 宿主在 dwj 独立环境时，Claude 后端也经 dwj 启动（独立配置与代理），不落回默认 ~/.claude。
+    if [[ "$host_config" == "$HOME/.claude-dwj" && " $* " != *" commandcode "* ]]; then
+      export CLAUDE_WORKER_LAUNCHER="$HOME/.local/bin/dwj"
+    fi
+    exec "$real" "$@"
+    ;;
+  wait)
+    if [[ " $* " != *" --consumer "* && "$*" != *"--consumer="* && -n "${CLAUDE_CODE_SESSION_ID:-}" ]]; then
+      exec "$real" "$@" --consumer "claude-${CLAUDE_CODE_SESSION_ID}"
+    fi
+    exec "$real" "$@"
+    ;;
+  *)
+    exec "$real" "$@"
+    ;;
+esac
