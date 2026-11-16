@@ -5,7 +5,7 @@ description: Delegate implementation, repair, review, test, repository search, o
 
 # Subworker
 
-Use `~/.codex/skills/subworker/bin/subworker` as the entry point. Run `profiles` for supported effort defaults and capabilities; `help` for syntax. Preserve the user's backend, model, and effort choices.
+Use `~/.codex/skills/subworker/bin/subworker` as the entry point. Run `profiles` for supported effort defaults and capabilities; `help` for syntax. Preserve the user's backend, model, and effort choices; example models never override them. When the user has not chosen and the run would incur noticeable cost or send project code to a third-party model provider, confirm backend and model in one sentence before dispatch.
 
 ## Workspace and deliverable
 
@@ -30,12 +30,12 @@ $SUBWORKER wait --run-id draft-1 --timeout 60
 $SUBWORKER continue --run-id draft-1 -- "Address the specific review findings, then stop."
 ```
 
-The example model does not override a user selection. Other backend arguments:
+Other backend arguments:
 
 | Backend | Selection and capabilities | Follow-up |
 |---|---|---|
 | Pi (default) | `--provider ID --model ID --thinking LEVEL`; optional `--capability docs`, `lens`, `context`, or `browser`; configured Pi skills load normally | `continue`; active `steer` requires dispatch with `--live` |
-| Agy | Explicit `--model ID --effort LEVEL`; LEVEL is low, medium, or high (default high); write/in-place=`accept-edits`; native skills/MCP/plugins | `continue`; no live, steer, or capability flags |
+| Agy | Explicit `--model ID --effort LEVEL`; LEVEL is low, medium, high, or xhigh (default high); write/in-place=`accept-edits`; native skills/MCP/plugins | `continue`; no live, steer, or capability flags |
 | Claude Code | `--provider commandcode` or `native`, `--model ID --effort LEVEL`; CommandCode uses an ephemeral bridge with the Pi key; write=`auto`, in-place=`acceptEdits`; native skills/MCP/plugins | `continue`; no live, steer, or capability flags; internal orchestration disabled unless `--allow-orchestration` |
 | Grok Build | `--backend grok --model grok-4.6 --effort xhigh` (defaults shown); native skills/MCP/plugins; runtime supplies bypass automatically | `continue` resumes the exact owned session; no live, steer, or capability flags |
 | Codex CLI | `--backend codex -m MODEL --effort LEVEL` (minimal–max, default high; model defaults to `~/.codex/config.toml`); uses the existing Codex login, native skills/MCP; **OS-enforced sandbox**: read=`read-only` (no writes, no network), write/in-place=`workspace-write` with network, approval `never`; subworker owns `--sandbox`/`sandbox_mode`/`approval_policy`; host `CODEX_THREAD_ID`/`CODEX_SANDBOX*` are not inherited | `continue` resumes the same Codex thread (`codex exec resume`); no live, steer, or capability flags; Codex session history stays in `~/.codex/sessions` after cleanup |
@@ -46,12 +46,14 @@ Up to 10 concurrent runs. One `wait` accepts multiple `--run-id` arguments and r
 ## Review and recovery
 
 - `success` means normal runtime completion with a non-empty response, **not task acceptance**. Inspect actual files and relevant checks. Validate JSON when the requested interface requires it.
+- Write-mode changes never reach the user's source automatically. Read `changes.patch`, then merge with `git apply` once approved or as the user directs. `status --run-id ID` reports the worktree, session, and other paths.
 - A failed run can contain useful files or `finalText`. Review before retrying; do not discard them or relabel native `ERROR` as success merely because text is complete. `continue` preserves the conversation and prior-turn history but resets current error/output fields.
 - Use `diagnose --run-id ID` for configuration, alerts, and retry guidance. `providerRetryCount` counts observed native CLI retries; `null` means unknown. Fix auth/configuration/unsupported-parameter failures before retrying. While the CLI actively retries a transient error, wait rather than dispatch a duplicate. Guidance is advisory and does not block explicit `continue`.
 - Stop via `cancel --run-id ID --reason "..." --timeout 30`; never kill the supervisor directly. Review `result.json` and `changes.patch` where present before `cleanup --reviewed yes --run-id ID` removes worktree/session/temp resources. Result-bearing runs are not automatically deleted.
 
 ## Operational boundaries
 
+- Only the Codex and Muse backends run inside an OS sandbox, and only Codex read mode is fully enforced read-only (it also blocks network). Prefer Codex when a truly read-only review or a strictly bounded write scope is required; for networked research use in-place with a confined directory.
 - Existing Agy `toolPermission=always-proceed` or Claude `permissions.defaultMode=bypassPermissions` causes explicit `--dangerously-skip-permissions`, recorded in `backendArgs` and diagnose. Do not change these settings without authorization. In bypass mode, task boundaries are instructions, not enforced isolation. Pi has no equivalent approval flag.
 - Grok dispatch and continue automatically supply `--permission-mode bypassPermissions --always-approve`, recorded in `backendArgs` via the normalized bypass flag. Callers need not pass a permission option. This applies to read mode too: read-only scope is prompt-constrained, not enforced by native approvals. Global settings are unchanged. Cleanup deletes only the assigned local Grok session, not remote history or shared prompt history.
 - Hard/idle timeouts are disabled by default, except on the Agy backend: hard 3h (10800s) and idle 30min (1800s), because Agy can hang silently on API retries or after its final turn. An explicit `--hard-timeout`/`--idle-timeout` (including `0` = off) wins. When an Agy turn dies from a transport cut-off or the idle timeout, the supervisor resumes the same conversation once (`autoResume: true` in the receipt, earlier turn kept under `turns`); `wait` rides through it, a second failure stands. `SUBWORKER_AGY_AUTO_RESUME=0` turns the resume off. Startup attention defaults to 60s, silence reminder to 600s, and no-tool progress reminder to 600s in write/in-place or 0 in read mode. These are soft notifications, not cancellation; 0 disables each. Set `--hard-timeout` or `--idle-timeout` only when needed.
